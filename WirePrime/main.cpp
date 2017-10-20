@@ -23,12 +23,12 @@ void printer(SDL_Surface* screen,int xsize,int ysize, int xoffset,int yoffset, u
 
 const char *source =																			//The OpenCL code, if you can move it to a file, bariemai!
 "__kernel void nextgen1(__global uchar *oldtable, __global uchar *newtable,	    \n"				//This code find the next generation off ONE living cell
-"						__global int	  *todo,								\n"
+"						__global short2	  *todo,								\n"
 "						int	xsize, int ysize)									\n"
 "{																				\n"
-"	int counter = 0;															\n"	
-"	int todox = *(todo + get_global_id(0)*2);									\n"				//get_global_id(0) gives which (1st, 2nd... 10000th) living cell we calculate
-"	int todoy = *(todo + get_global_id(0)*2 + 1);								\n"
+"	short counter = 0;															\n"
+"	short todox = todo[get_global_id(0)].x;										\n"				//get_global_id(0) gives which (1st, 2nd... 10000th) living cell we calculate
+"	short todoy = todo[get_global_id(0)].y;										\n"
 "	int y = todoy*(xsize+2);													\n"
 "	switch (*(oldtable + y + todox)) {											\n"				//Those branches maybe hurt performance
 "		case 1:																	\n"				//Check .pdf in order to understand what each number mean
@@ -52,7 +52,41 @@ const char *source =																			//The OpenCL code, if you can move it to 
 "																				\n"
 "			break;																\n"
 "		}																		\n"
-"}																				\n";
+"}																				\n"
+"																				\n"
+"__kernel void nextgen2(__global uchar *oldtable, __global uchar *newtable,	    \n"				//This code find the next generation off ONE living cell
+"						__global short2	  *todo,								\n"
+"						int	xsize, int ysize)									\n"
+"{																				\n"
+"	short counter = 0;															\n"
+"	short todox = todo[get_global_id(0)].x;										\n"				//get_global_id(0) gives which (1st, 2nd... 10000th) living cell we calculate
+"	short todoy = todo[get_global_id(0)].y;										\n"
+"	int y = todoy*(xsize+2);													\n"
+"	switch (*(oldtable + y + todox)) {											\n"				//Those branches maybe hurt performance
+"		case 1:																	\n"				//Check .pdf in order to understand what each number mean
+"			*(newtable + y + todox) = 2;										\n"
+"			break;																\n"
+"		case 2:																	\n"
+"			*(newtable + y + todox) = 3;										\n"
+"			break;																\n"
+"		case 3:																	\n"
+"			counter += (*(oldtable + y + todox - 1) == 1);						\n"
+"			counter += (*(oldtable + y + todox + 1) == 1);						\n"
+"			counter += (*(oldtable + y - xsize + todox - 2) == 1);				\n"
+"			counter += (*(oldtable + y + xsize + todox + 2) == 1);				\n"
+"			counter += (*(oldtable + y - xsize + todox - 3) == 1);				\n"
+"			counter += (*(oldtable + y - xsize + todox - 1) == 1);				\n"
+"			counter += (*(oldtable + y + xsize + todox + 1) == 1);				\n"
+"			counter += (*(oldtable + y + xsize + todox + 3) == 1);				\n"
+"																				\n"
+"			if (counter == 1 || counter == 2) *(newtable + y + todox) = 1;		\n"
+"			else *(newtable + y + todox) = 3;									\n"
+"																				\n"
+"			break;																\n"
+"		}																		\n"
+"}																				\n"
+"																				\n";
+
 
 struct pixelcolor																				//RGB struct
 {
@@ -233,6 +267,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	cl_kernel nextgen1 = clCreateKernel(program, "nextgen1", NULL);
+	cl_kernel nextgen2 = clCreateKernel(program, "nextgen2", NULL);
 
 	SDL_Log("Compute units: %d\n", compute_units);												//5. Calculating optimal global work size and faking cells in order to make livingcell *time* global work size
 
@@ -247,7 +282,7 @@ int main(int argc, char *argv[]) {
 	if(howmany%global_work_size)																//So.. this trick will help as find a number x, so (A+x)=n*B , n E N. A = howmany(living cells), B = min_global_work_size and x = the fake cells (can be BLACK or living-NOT BLACK)
 		global_work_size = howmany + (global_work_size - howmany%global_work_size);				
 
-	int* todo = new int[global_work_size *2];													//Creating a array of the positions at the pattern (NOT ADDRESS!) of all living cells
+	short* todo = new short[global_work_size *2];													//Creating a array of the positions at the pattern (NOT ADDRESS!) of all living cells
 	
 	SDL_Log("Optimized fake population and final global work size: %d\n", global_work_size);
 	SDL_Log("Starting populating list of all living cells (and the fake ones)\n");
@@ -278,7 +313,7 @@ int main(int argc, char *argv[]) {
 
 	cl_mem table_buf		= clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR , size * sizeof(uint8_t)    , table    , NULL);					
 	cl_mem helptable_buf	= clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR , size * sizeof(uint8_t)    , helptable, NULL);
-	cl_mem todo_buf			= clCreateBuffer(context, CL_MEM_READ_ONLY	| CL_MEM_COPY_HOST_PTR , global_work_size * sizeof(int) * 2 , todo     , NULL);			//We gota check if todo list can be kinda local so access to it will be faster. Even make it SHORT type instead of INT (we can for primes.rle) will help GPU to cache it better (maybe)
+	cl_mem todo_buf			= clCreateBuffer(context, CL_MEM_READ_ONLY	| CL_MEM_COPY_HOST_PTR , global_work_size * sizeof(short) * 2 , todo     , NULL);			//We gota check if todo list can be kinda local so access to it will be faster. Even make it SHORT type instead of INT (we can for primes.rle) will help GPU to cache it better (maybe)
 
 	// 6. Set default kernel arguments.
 
@@ -287,6 +322,13 @@ int main(int argc, char *argv[]) {
 	clSetKernelArg(nextgen1, 2, sizeof(void *), (void*)&todo_buf);
 	clSetKernelArg(nextgen1, 3, sizeof(xsize), (void*)&xsize);
 	clSetKernelArg(nextgen1, 4, sizeof(ysize), (void*)&ysize);
+
+
+	clSetKernelArg(nextgen2, 0, sizeof(void *), (void*)&helptable_buf);								
+	clSetKernelArg(nextgen2, 1, sizeof(void *), (void*)&table_buf);
+	clSetKernelArg(nextgen2, 2, sizeof(void *), (void*)&todo_buf);
+	clSetKernelArg(nextgen2, 3, sizeof(xsize), (void*)&xsize);
+	clSetKernelArg(nextgen2, 4, sizeof(ysize), (void*)&ysize);
 
 	cl_event ev;
 	
@@ -302,8 +344,6 @@ int main(int argc, char *argv[]) {
 
 		int i;
 		for(i=0;i<refreshevery;i+=2){															//Dont kill me. This shit has BIG overhead. i+=2 means that we calculated 2 generation in the following loop
-			clSetKernelArg(nextgen1, 0, sizeof(void *), (void*)&table_buf);						//Old generation: table_buf
-			clSetKernelArg(nextgen1, 1, sizeof(void *), (void*)&helptable_buf);					//New generation will be written at helptable_buf
 
 			clEnqueueNDRangeKernel(queue,														//Calculate next generation.
 				nextgen1,																		//Google this shit. For me it was copy pasta from a example
@@ -313,11 +353,8 @@ int main(int argc, char *argv[]) {
 				&local_work_size,
 				0, NULL, &ev);																	//One of this settings it is vital in order finish this kernel call BEFORE calling the next one
 
-			clSetKernelArg(nextgen1, 1, sizeof(void *), (void*)&table_buf);						//Old generation: helptable_buf 
-			clSetKernelArg(nextgen1, 0, sizeof(void *), (void*)&helptable_buf);					//New generation will be written at table_buf
-
 			clEnqueueNDRangeKernel(queue,														//Calculate one more generation so the again the table_buf will have the latest.
-				nextgen1,
+				nextgen2,
 				1,
 				NULL,
 				&global_work_size,
