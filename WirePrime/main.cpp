@@ -24,7 +24,7 @@ void printer(SDL_Surface* screen,int xsize,int ysize, int xoffset,int yoffset, u
 const char *source =																			//The OpenCL code, if you can move it to a file, bariemai!
 "__kernel void nextgen1(__global uchar *oldtable, __global uchar *newtable,	    \n"				//This code find the next generation off ONE living cell
 "						__global short2	  *todo,								\n"
-"						int	xsize, int ysize)									\n"
+"						int	xsize)												\n"
 "{																				\n"
 "	short counter = 0;															\n"
 "	short todox = todo[get_global_id(0)].x;										\n"				//get_global_id(0) gives which (1st, 2nd... 10000th) living cell we calculate
@@ -56,7 +56,7 @@ const char *source =																			//The OpenCL code, if you can move it to 
 "																				\n"
 "__kernel void nextgen2(__global uchar *oldtable, __global uchar *newtable,	    \n"				//This code find the next generation off ONE living cell
 "						__global short2	  *todo,								\n"
-"						int	xsize, int ysize)									\n"
+"						int	xsize)												\n"
 "{																				\n"
 "	short counter = 0;															\n"
 "	short todox = todo[get_global_id(0)].x;										\n"				//get_global_id(0) gives which (1st, 2nd... 10000th) living cell we calculate
@@ -321,14 +321,13 @@ int main(int argc, char *argv[]) {
 	clSetKernelArg(nextgen1, 1, sizeof(void *), (void*)&helptable_buf);
 	clSetKernelArg(nextgen1, 2, sizeof(void *), (void*)&todo_buf);
 	clSetKernelArg(nextgen1, 3, sizeof(xsize), (void*)&xsize);
-	clSetKernelArg(nextgen1, 4, sizeof(ysize), (void*)&ysize);
 
 
 	clSetKernelArg(nextgen2, 0, sizeof(void *), (void*)&helptable_buf);								
 	clSetKernelArg(nextgen2, 1, sizeof(void *), (void*)&table_buf);
 	clSetKernelArg(nextgen2, 2, sizeof(void *), (void*)&todo_buf);
 	clSetKernelArg(nextgen2, 3, sizeof(xsize), (void*)&xsize);
-	clSetKernelArg(nextgen2, 4, sizeof(ysize), (void*)&ysize);
+
 
 	cl_event ev;
 	
@@ -351,7 +350,7 @@ int main(int argc, char *argv[]) {
 				NULL,
 				&global_work_size,
 				&local_work_size,
-				0, NULL, &ev);																	//One of this settings it is vital in order finish this kernel call BEFORE calling the next one
+				0, NULL, NULL);																	//One of this settings it is vital in order finish this kernel call BEFORE calling the next one
 
 			clEnqueueNDRangeKernel(queue,														//Calculate one more generation so the again the table_buf will have the latest.
 				nextgen2,
@@ -359,7 +358,7 @@ int main(int argc, char *argv[]) {
 				NULL,
 				&global_work_size,
 				&local_work_size,
-				0, NULL, &ev);
+				0, NULL, NULL);
 		}
 
 		SDL_Log("Reading buffer\n");															//After "refreshevery" we render the latest generation
@@ -376,6 +375,13 @@ int main(int argc, char *argv[]) {
 		generation +=refreshevery;																//Tell at the command line which generation we will calculate
 		SDL_Log("Rendering generation: %d\n",generation);
 		printer(screen,xsize,ysize,xoffset,yoffset,ptr_table);									//Print itt!
+		
+		clEnqueueUnmapMemObject(queue,
+			table_buf,
+			ptr_table,
+			0,
+			NULL,
+			NULL);
 	}
 	
 	SDL_Quit();
